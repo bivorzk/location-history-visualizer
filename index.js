@@ -66,53 +66,11 @@
 		$( '#intro' ).addClass( 'hidden' );
 		$( '#working' ).removeClass( 'hidden' );
 
-		var SCALAR_E7 = 0.0000001; // Since Google Takeout stores latlngs as integers
-		var latlngs = [];
-
-		var os = new oboe();
-
-		os.node( 'locations.*', function ( location ) {
-			var latitude = location.latitudeE7 * SCALAR_E7,
-				longitude = location.longitudeE7 * SCALAR_E7;
-
-			// Handle negative latlngs due to google unsigned/signed integer bug.
-			if ( latitude > 180 ) latitude = latitude - (2 ** 32) * SCALAR_E7;
-			if ( longitude > 180 ) longitude = longitude - (2 ** 32) * SCALAR_E7;
-
-			if ( type === 'json' ) latlngs.push( [ latitude, longitude ] );
-			return oboe.drop;
-		} ).node( 'timelineEdits.*.rawSignal.signal.position.point', function ( point ) {
-			// Google Takeout format: Timeline Edits.json
-			var latitude = point.latE7 * SCALAR_E7,
-				longitude = point.lngE7 * SCALAR_E7;
-
-			// Handle negative latlngs due to google unsigned/signed integer bug.
-			if ( latitude > 180 ) latitude = latitude - (2 ** 32) * SCALAR_E7;
-			if ( longitude > 180 ) longitude = longitude - (2 ** 32) * SCALAR_E7;
-
-			if ( type === 'json' ) latlngs.push( [ latitude, longitude ] );
-			return oboe.drop;
-		} ).node( 'semanticSegments.*.timelinePath.*.point', function ( point ) {
-			// Phone timeline export format: Timeline.json
-			// point is a string like "47.7156656°, 17.6382436°"
-			var latlng = parseLatLngString( point );
-			if ( latlng && type === 'json' ) latlngs.push( latlng );
-			return oboe.drop;
-		} ).done( function () {
-			status( 'Generating map...' );
-			heat._latlngs = latlngs;
-
-			heat.redraw();
-			stageThree(  /* numberProcessed */ latlngs.length );
-
-		} );
-
 		var fileSize = prettySize( file.size );
 
 		status( 'Preparing to import file ( ' + fileSize + ' )...' );
 
-		// Now start working!
-		if ( type === 'json' ) parseJSONFile( file, os );
+		if ( type === 'json' ) parseJSONFile( file );
 		if ( type === 'kml' ) parseKMLFile( file );
 	}
 
@@ -191,57 +149,65 @@
 	}
 
 	/*
-	Break file into chunks and emit 'data' to oboe instance
+	Worker source — runs off the main thread so the UI never freezes.
+	Uses regex instead of a streaming JSON parser: order-of-magnitude faster
+	and handles all three supported file formats in a single pass each.
 	*/
+	var WORKER_SRC = [
+		'var S=1e-7,FIX=Math.pow(2,32)*S;',
+		'function f(n){return n>180?n-FIX:n;}',
+		'self.onmessage=function(e){',
+		'  var file=e.data;',
+		'  self.postMessage({type:"status",text:"Reading file..."});',
+		'  var text;',
+		'  try{text=new FileReaderSync().readAsText(file);}',
+		'  catch(ex){self.postMessage({type:"error",text:ex.message});return;}',
+		'  self.postMessage({type:"status",text:"Extracting coordinates..."});',
+		'  var pts=[],m;',
+		// Timeline.json — timelinePath points: "point":"lat\u00b0, lng\u00b0"
+		'  var r1=/"point"\\s*:\\s*"([-\\d.]+)\\u00b0,\\s*([-\\d.]+)\\u00b0"/g;',
+		'  while((m=r1.exec(text))!==null)pts.push([parseFloat(m[1]),parseFloat(m[2])]);',
+		// Timeline.json — activity/visit: "latLng":"lat\u00b0, lng\u00b0"
+		'  var r2=/"latLng"\\s*:\\s*"([-\\d.]+)\\u00b0,\\s*([-\\d.]+)\\u00b0"/g;',
+		'  while((m=r2.exec(text))!==null)pts.push([parseFloat(m[1]),parseFloat(m[2])]);',
+		// Timeline Edits.json — "latE7":N,"lngE7":N (always in same small object)
+		'  var r3=/"latE7"\\s*:\\s*(-?\\d+)[\\s\\S]{0,200}?"lngE7"\\s*:\\s*(-?\\d+)/g;',
+		'  while((m=r3.exec(text))!==null)pts.push([f(+m[1]*S),f(+m[2]*S)]);',
+		// LocationHistory.json (legacy) — "latitudeE7":N,"longitudeE7":N
+		'  var r4=/"latitudeE7"\\s*:\\s*(-?\\d+)[\\s\\S]{0,200}?"longitudeE7"\\s*:\\s*(-?\\d+)/g;',
+		'  while((m=r4.exec(text))!==null)pts.push([f(+m[1]*S),f(+m[2]*S)]);',
+		'  self.postMessage({type:"done",latlngs:pts});',
+		'};'
+	].join( '\n' );
 
-	function parseLatLngString( str ) {
-		// Parses strings like "47.7156656°, 17.6382436°"
-		var parts = str.replace( /°/g, '' ).split( ',' );
-		if ( parts.length === 2 ) {
-			var lat = parseFloat( parts[ 0 ].trim() );
-			var lng = parseFloat( parts[ 1 ].trim() );
-			if ( !isNaN( lat ) && !isNaN( lng ) ) return [ lat, lng ];
-		}
-		return null;
-	}
+	function parseJSONFile( file ) {
+		var url = URL.createObjectURL( new Blob( [ WORKER_SRC ], { type: 'application/javascript' } ) );
+		var worker = new Worker( url );
 
-	function parseJSONFile( file, oboeInstance ) {
-		var fileSize = file.size;
-		var prettyFileSize = prettySize(fileSize);
-		var chunkSize = 512 * 1024; // bytes
-		var offset = 0;
-		var self = this; // we need a reference to the current object
-		var chunkReaderBlock = null;
-		var startTime = Date.now();
-		var endTime = Date.now();
-		var readEventHandler = function ( evt ) {
-			if ( evt.target.error == null ) {
-				offset += evt.target.result.length;
-				var chunk = evt.target.result;
-				var percentLoaded = ( 100 * offset / fileSize ).toFixed( 0 );
-				status( percentLoaded + '% of ' + prettyFileSize + ' loaded...' );
-				oboeInstance.emit( 'data', chunk ); // callback for handling read chunk
-			} else {
-				return;
+		worker.onmessage = function ( e ) {
+			var msg = e.data;
+			if ( msg.type === 'status' ) {
+				status( msg.text );
+			} else if ( msg.type === 'done' ) {
+				URL.revokeObjectURL( url );
+				status( 'Generating map...' );
+				heat._latlngs = msg.latlngs;
+				heat.redraw();
+				stageThree( msg.latlngs.length );
+				worker.terminate();
+			} else if ( msg.type === 'error' ) {
+				URL.revokeObjectURL( url );
+				status( 'Error processing file: ' + msg.text );
+				worker.terminate();
 			}
-			if ( offset >= fileSize ) {
-				oboeInstance.emit( 'done' );
-				return;
-			}
+		};
 
-			// of to the next chunk
-			chunkReaderBlock( offset, chunkSize, file );
-		}
+		worker.onerror = function ( e ) {
+			URL.revokeObjectURL( url );
+			status( 'Could not start worker: ' + e.message );
+		};
 
-		chunkReaderBlock = function ( _offset, length, _file ) {
-			var r = new FileReader();
-			var blob = _file.slice( _offset, length + _offset );
-			r.onload = readEventHandler;
-			r.readAsText( blob );
-		}
-
-		// now let's start the read with the first block
-		chunkReaderBlock( offset, chunkSize, file );
+		worker.postMessage( file );
 	}
 
 	/*
