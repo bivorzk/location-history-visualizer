@@ -81,6 +81,11 @@
         <div class="control-block actions">
             <button id="reset">Reset to defaults</button>
         </div>
+        <div class="control-block actions">
+            <button id="addFiles">Add more files</button>
+            <input type="file" id="addFileInput" accept=".json,.kml" multiple style="display:none">
+        </div>
+        <div id="addStatus" class="control-block" style="font-size:0.85em;color:#ccc;min-height:1.2em;word-break:break-all;"></div>
     </div>
 
     <!-- The map, populated by leaflet.js -->

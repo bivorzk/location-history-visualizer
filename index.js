@@ -1,5 +1,5 @@
 ( function ( $, L, prettySize ) {
-	var map, heat,
+	var map, heat, allLatlngs = [],
 		heatOptions = {
 			tileOpacity: 1,
 			heatOpacity: 1,
@@ -145,6 +145,16 @@
 				$heatmapLayer.css( 'opacity', originalHeatOptions.heatOpacity );
 				$tileLayer.css( 'opacity', originalHeatOptions.tileOpacity );
 			} );
+
+			$( '#addFiles' ).click( function () {
+				$( '#addFileInput' ).val( '' ).click();
+			} );
+
+			$( '#addFileInput' ).change( function () {
+				if ( this.files.length > 0 ) {
+					processAdditionalFiles( this.files );
+				}
+			} );
 		}
 	}
 
@@ -191,9 +201,10 @@
 			} else if ( msg.type === 'done' ) {
 				URL.revokeObjectURL( url );
 				status( 'Generating map...' );
-				heat._latlngs = msg.latlngs;
+				allLatlngs = msg.latlngs;
+				heat._latlngs = allLatlngs;
 				heat.redraw();
-				stageThree( msg.latlngs.length );
+				stageThree( allLatlngs.length );
 				worker.terminate();
 			} else if ( msg.type === 'error' ) {
 				URL.revokeObjectURL( url );
@@ -210,9 +221,65 @@
 		worker.postMessage( file );
 	}
 
-	/*
-        Default behavior for file upload (no chunking)	
-	*/
+	function processAdditionalFiles( files ) {
+		var queue = Array.prototype.slice.call( files );
+
+		function next() {
+			if ( queue.length === 0 ) return;
+			var file = queue.shift();
+			var isKml = /\.kml$/i.test( file.name );
+			$( '#addStatus' ).text( 'Processing ' + file.name + '...' );
+
+			if ( !isKml ) {
+				var url = URL.createObjectURL( new Blob( [ WORKER_SRC ], { type: 'application/javascript' } ) );
+				var worker = new Worker( url );
+				worker.onmessage = function ( e ) {
+					var msg = e.data;
+					if ( msg.type === 'status' ) {
+						$( '#addStatus' ).text( msg.text );
+					} else if ( msg.type === 'done' ) {
+						URL.revokeObjectURL( url );
+						Array.prototype.push.apply( allLatlngs, msg.latlngs );
+						heat._latlngs = allLatlngs;
+						heat.redraw();
+						$( '#numberProcessed' ).text( allLatlngs.length.toLocaleString() );
+						$( '#addStatus' ).text( 'Added ' + msg.latlngs.length.toLocaleString() + ' points from ' + file.name );
+						worker.terminate();
+						next();
+					} else if ( msg.type === 'error' ) {
+						URL.revokeObjectURL( url );
+						$( '#addStatus' ).text( 'Error in ' + file.name + ': ' + msg.text );
+						worker.terminate();
+						next();
+					}
+				};
+				worker.onerror = function ( e ) {
+					URL.revokeObjectURL( url );
+					$( '#addStatus' ).text( 'Worker error: ' + e.message );
+					next();
+				};
+				worker.postMessage( file );
+			} else {
+				var reader = new FileReader();
+				reader.onload = function ( e ) {
+					var latlngs = getLocationDataFromKml( e.target.result );
+					Array.prototype.push.apply( allLatlngs, latlngs );
+					heat._latlngs = allLatlngs;
+					heat.redraw();
+					$( '#numberProcessed' ).text( allLatlngs.length.toLocaleString() );
+					$( '#addStatus' ).text( 'Added ' + latlngs.length.toLocaleString() + ' points from ' + file.name );
+					next();
+				};
+				reader.onerror = function () {
+					$( '#addStatus' ).text( 'Error reading ' + file.name );
+					next();
+				};
+				reader.readAsText( file );
+			}
+		}
+
+		next();
+	}
 
 	function parseKMLFile( file ) {
 		var fileSize = prettySize( file.size );
@@ -223,12 +290,12 @@
 		};
 
 		reader.onload = function ( e ) {
-			var latlngs;
 			status( 'Generating map...' );
-			latlngs = getLocationDataFromKml( e.target.result );
-			heat._latlngs = latlngs;
+			var latlngs = getLocationDataFromKml( e.target.result );
+			allLatlngs = latlngs;
+			heat._latlngs = allLatlngs;
 			heat.redraw();
-			stageThree( latlngs.length );
+			stageThree( allLatlngs.length );
 		}
 		reader.onerror = function () {
 			status( 'Something went wrong reading your JSON file. Ensure you\'re uploading a "direct-from-Google" JSON file and try again, or create an issue on GitHub if the problem persists. ( error: ' + reader.error + ' )' );
