@@ -1,2 +1,4 @@
 .DS_Store
-node_modules
+node_modules ???????
+Timeline Edits.json //This is the one you get from Google Takeaway
+Timeline.json // This is the one you get from the export option from your phone

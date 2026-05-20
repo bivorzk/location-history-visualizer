@@ -81,6 +81,23 @@
 
 			if ( type === 'json' ) latlngs.push( [ latitude, longitude ] );
 			return oboe.drop;
+		} ).node( 'timelineEdits.*.rawSignal.signal.position.point', function ( point ) {
+			// Google Takeout format: Timeline Edits.json
+			var latitude = point.latE7 * SCALAR_E7,
+				longitude = point.lngE7 * SCALAR_E7;
+
+			// Handle negative latlngs due to google unsigned/signed integer bug.
+			if ( latitude > 180 ) latitude = latitude - (2 ** 32) * SCALAR_E7;
+			if ( longitude > 180 ) longitude = longitude - (2 ** 32) * SCALAR_E7;
+
+			if ( type === 'json' ) latlngs.push( [ latitude, longitude ] );
+			return oboe.drop;
+		} ).node( 'semanticSegments.*.timelinePath.*.point', function ( point ) {
+			// Phone timeline export format: Timeline.json
+			// point is a string like "47.7156656°, 17.6382436°"
+			var latlng = parseLatLngString( point );
+			if ( latlng && type === 'json' ) latlngs.push( latlng );
+			return oboe.drop;
 		} ).done( function () {
 			status( 'Generating map...' );
 			heat._latlngs = latlngs;
@@ -176,6 +193,17 @@
 	/*
 	Break file into chunks and emit 'data' to oboe instance
 	*/
+
+	function parseLatLngString( str ) {
+		// Parses strings like "47.7156656°, 17.6382436°"
+		var parts = str.replace( /°/g, '' ).split( ',' );
+		if ( parts.length === 2 ) {
+			var lat = parseFloat( parts[ 0 ].trim() );
+			var lng = parseFloat( parts[ 1 ].trim() );
+			if ( !isNaN( lat ) && !isNaN( lng ) ) return [ lat, lng ];
+		}
+		return null;
+	}
 
 	function parseJSONFile( file, oboeInstance ) {
 		var fileSize = file.size;

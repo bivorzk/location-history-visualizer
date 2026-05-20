@@ -1,12 +1,22 @@
 # location-history-visualizer
 
-**Available online: [locationhistoryvisualizer.com/heatmap/](https://locationhistoryvisualizer.com/heatmap/)**
+> **This is a fork of [theopolisme/location-history-visualizer](https://github.com/theopolisme/location-history-visualizer).**
+> The original project supports `LocationHistory.json` and `Timeline Edits.json` exports from Google Takeout.
+> This fork adds support for **`Timeline.json`** — the file exported directly from the Google Maps app on your phone via *Your Timeline → Export Timeline data*.
 
 A tool for visualizing your complete, consolidated, collected Google [Location History](https://google.com/locationhistory).
 
 It works directly in your web browser &ndash; no software to download, no packages to install. **Everyone deserves to know what data is being collected about them, without having to fiddle with cryptic pieces of software.**
 
-*location-history-visualizer* takes raw Google Takeout output and produces a heatmap of all of your location data over time, overlaid on an interactive map.
+*location-history-visualizer* takes raw Google Takeout or phone Timeline output and produces a heatmap of all of your location data over time, overlaid on an interactive map.
+
+## Supported file formats
+
+| File | Source |
+|---|---|
+| `LocationHistory.json` | Google Takeout (legacy format) |
+| `Timeline Edits.json` | Google Takeout (current format) |
+| `Timeline.json` | Google Maps app → Your Timeline → Export Timeline data |
 
 ## Packages used
 * [leaflet.js](http://leafletjs.com/), for rendering the interactive map
